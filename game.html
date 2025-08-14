@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>Texas Hold'em Tavolo Rotondo</title>
+<style>
+body { font-family: Arial; background: #0b2d4f; color: #fff; margin:0; padding:0;}
+h1 { color: #f0c000; text-align: center; margin: 20px 0; }
+#table { position: relative; width: 800px; height: 600px; margin: 20px auto; border-radius: 50%; background: #006400; border: 5px solid #fff; }
+.player { position: absolute; width: 140px; text-align: center; transform: translate(-50%, -50%); }
+.cards { display: flex; justify-content: center; gap: -15px; margin-top:5px; }
+.card { width: 50px; height: 70px; border-radius: 5px; background: #fff; color: #000; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 16px; border: 2px solid #000;}
+#board { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: flex; gap: -10px; }
+.pot { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-weight: bold; color: yellow; font-size: 20px; background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 10px; }
+.actionButtons { margin-top: 20px; text-align: center;}
+button { padding: 10px 15px; margin: 5px; font-size: 14px; cursor: pointer; border-radius: 5px; border: none; background: #f0c000; color: #000; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Texas Hold'em Tavolo Rotondo</h1>
+
+<div style="text-align:center;">
+Numero di giocatori: 
+<select id="numPlayers">
+<option value="2">2</option>
+<option value="3">3</option>
+<option value="4">4</option>
+</select>
+<button onclick="startGame()">Nuovo Gioco</button>
+</div>
+
+<div id="table">
+  <div id="board"></div>
+  <div class="pot" id="potValue">Pot: 0</div>
+</div>
+
+<div class="actionButtons" id="actions"></div>
+
+<script>
+const suits=["♠","♥","♦","♣"];
+const values=[2,3,4,5,6,7,8,9,10,11,12,13,14];
+let deck=[], hands=[], board=[], numPlayers=0;
+let stacks=[], potValue=0, currentPlayer=0, phase=0, currentBets=[];
+let activePlayers=[]; // per gestire chi ha passato
+
+function createDeck(){
+  const deck=[];
+  for(let s of suits){
+    for(let v of values){
+      deck.push({value:v,suit:s});
+    }
+  }
+  return deck.sort(()=>Math.random()-0.5);
+}
+
+function cardString(c){ return (c.value>10?["J","Q","K","A"][c.value-11]:c.value)+c.suit; }
+
+function positionPlayers(n){
+  const table=document.getElementById("table");
+  table.querySelectorAll(".player").forEach(p=>p.remove());
+  for(let i=0;i<n;i++){
+    const angle= (i/n)*2*Math.PI - Math.PI/2; // inizio in alto
+    const x=50+40*Math.cos(angle);
+    const y=50+40*Math.sin(angle);
+    const div=document.createElement("div");
+    div.className="player";
+    div.style.left=`${x}%`;
+    div.style.top=`${y}%`;
+    div.id=`player${i}`;
+    div.innerHTML=`<b>${i===0?"Tu":"Bot "+i}</b><div class="cards" id="cards${i}"></div><div>Stack: <span id="stack${i}"></span></div><div>Punta: <span id="bet${i}">0</span></div>`;
+    table.appendChild(div);
+  }
+}
+
+function showHands(showAll){
+  for(let i=0;i<numPlayers;i++){
+    const cardsDiv=document.getElementById(`cards${i}`);
+    cardsDiv.innerHTML=hands[i].map(c=>`<div class="card">${showAll||i===0?cardString(c):"??"}</div>`).join('');
+    document.getElementById(`stack${i}`).textContent=stacks[i];
+    document.getElementById(`bet${i}`).textContent=currentBets[i]||0;
+  }
+  const boardDiv=document.getElementById("board");
+  boardDiv.innerHTML=board.map(c=>`<div class="card">${cardString(c)}</div>`).join('');
+  document.getElementById("potValue").textContent="Pot: "+potValue;
+}
+
+function evaluateHand(cards){
+  if(cards.length<5) return {rank:0,name:"Carta Alta"};
+  const vals=cards.map(c=>c.value).sort((a,b)=>a-b);
+  const suitsArr=cards.map(c=>c.suit);
+  const counts={};
+  vals.forEach(v=>counts[v]=(counts[v]||0)+1);
+  const pairs=Object.values(counts).filter(c=>c===2).length;
+  const three=Object.values(counts).filter(c=>c===3).length;
+  const four=Object.values(counts).filter(c=>c===4).length;
+  const isFlush=suitsArr.every(s=>s===suitsArr[0]);
+  let isStraight=true;
+  for(let i=1;i<vals.length;i++) if(vals[i]!==vals[i-1]+1){ isStraight=false; break; }
+  if(four===1) return {rank:8,name:"Poker"};
+  if(three===1 && pairs===1) return {rank:7,name:"Full"};
+  if(isFlush && isStraight) return {rank:9,name:"Scala Colore"};
+  if(isFlush) return {rank:6,name:"Colore"};
+  if(isStraight) return {rank:5,name:"Scala"};
+  if(three===1) return {rank:4,name:"Tris"};
+  if(pairs===2) return {rank:3,name:"Doppia Coppia"};
+  if(pairs===1) return {rank:2,name:"Coppia"};
+  return {rank:1,name:"Carta Alta"};
+}
+
+function botProbability(index){
+  const combined = hands[index].concat(board);
+  const val = evaluateHand(combined);
+  let chance = val.rank / 9;
+  chance += Math.random()*0.2-0.1;
+  return Math.min(Math.max(chance,0),1);
+}
+
+function botDecision(index){
+  const p = botProbability(index);
+  if(p>0.7 && stacks[index]>0){
+    const raise = Math.min(10 + Math.floor(Math.random()*30), stacks[index]);
+    stacks[index]-=raise; potValue+=raise; currentBets[index]=raise;
+    return `Alza ${raise}`;
+  } else if(p>0.35 && stacks[index]>0){
+    const call = Math.min(10, stacks[index]);
+    stacks[index]-=call; potValue+=call; currentBets[index]=call;
+    return `Chiama ${call}`;
+  } else {
+    activePlayers[index]=false; // bot passa
+    return "Passa";
+  }
+}
+
+function startGame(){
+  numPlayers=parseInt(document.getElementById("numPlayers").value);
+  deck=createDeck(); hands=[]; board=[]; stacks=[]; potValue=0; currentBets=[];
+  activePlayers=[];
+  for(let i=0;i<numPlayers;i++){
+    hands.push(deck.splice(0,2));
+    stacks.push(100);
+    currentBets.push(0);
+    activePlayers.push(true);
+  }
+  positionPlayers(numPlayers);
+  showHands(false);
+  phase=0; currentPlayer=0;
+  document.getElementById("actions").innerHTML="";
+  nextTurn();
+}
+
+function nextTurn(){
+  showHands(false);
+  if(activePlayers.filter(a=>a).length<=1){
+    endGame(); return;
+  }
+  if(currentPlayer===0 && activePlayers[0]){
+    const actionsDiv=document.getElementById("actions");
+    actionsDiv.innerHTML="";
+    ["Alza","Chiama","Passa"].forEach(act=>{
+      const b=document.createElement("button");
+      b.textContent=act;
+      b.onclick=()=>{
+        if(act==="Passa"){ activePlayers[0]=false; currentBets[0]=0; }
+        else {
+          let valore=act==="Alza"?10+Math.floor(Math.random()*30):10;
+          stacks[0]-=Math.min(valore, stacks[0]);
+          currentBets[0]+=Math.min(valore, stacks[0]);
+          potValue+=Math.min(valore, stacks[0]);
+        }
+        currentPlayer=1; nextTurn();
+      };
+      actionsDiv.appendChild(b);
+    });
+  } else {
+    if(!activePlayers[currentPlayer]){
+      currentPlayer=(currentPlayer+1)%numPlayers;
+      nextTurn(); return;
+    }
+    const decision = botDecision(currentPlayer);
+    alert(`Bot ${currentPlayer}: ${decision}`);
+    currentPlayer=(currentPlayer+1)%numPlayers;
+    nextTurn();
+  }
+}
+
+function endGame(){
+  const winners=activePlayers.map((a,i)=>a?i:-1).filter(i=>i>=0);
+  if(winners.length===1){
+    stacks[winners[0]]+=potValue;
+    alert(`Vince ${winners[0]===0?"Tu":"Bot "+winners[0]}!`);
+  } else alert(`Pareggio tra ${winners.map(i=>i===0?"Tu":"Bot "+i).join(", ")}`);
+  showHands(true);
+  document.getElementById("actions").innerHTML="";
+}
+</script>
+</body>
+</html>
